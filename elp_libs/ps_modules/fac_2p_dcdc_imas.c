@@ -704,7 +704,7 @@ static interrupt void isr_controller(void)
     static uint16_t i;
 
     //CLEAR_DEBUG_GPIO1;
-    SET_DEBUG_GPIO0;
+    //SET_DEBUG_GPIO0;
     SET_DEBUG_GPIO1;
 
     temp[0] = 0.0;

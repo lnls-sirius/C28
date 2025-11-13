@@ -69,6 +69,7 @@ void init_ps_module(ps_module_t *p_ps_module, ps_model_t model,
     p_ps_module->ps_reference       = 0.0;
     p_ps_module->ps_hard_interlock  = 0;
     p_ps_module->ps_soft_interlock  = 0;
+    p_ps_module->ps_alarms          = 0;
 
     p_ps_module->turn_on            = turn_on;
     p_ps_module->turn_off           = turn_off;

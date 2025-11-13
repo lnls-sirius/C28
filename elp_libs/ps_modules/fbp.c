@@ -18,9 +18,7 @@
  * @date 23/11/2017
  *
  */
-/**
- * Control paramters
- */
+
 #include <float.h>
 
 #include "boards/udc_c28.h"
@@ -42,11 +40,10 @@
 #define MIN_DCLINK(id)          ANALOG_VARS_MIN[8+id]
 #define MAX_DCLINK(id)          ANALOG_VARS_MAX[8+id]
 #define MAX_TEMP(id)            ANALOG_VARS_MAX[12+id]
+
 /**
  * All power supplies defines
- *
  */
-
 #define DECIMATION_FACTOR       1//(HRADC_FREQ_SAMP/ISR_CONTROL_FREQ)
 
 #define SIGGEN                  SIGGEN_CTOM
@@ -206,11 +203,15 @@ typedef enum
     Heatsink_Overtemperature
 } soft_interlocks_t;
 
+typedef enum
+{
+    High_Sync_Input_Frequency = 0x00000001
+} alarms_t;
+
 #define NUM_HARD_INTERLOCKS             MOSFETs_Driver_Fault + 1
 #define NUM_SOFT_INTERLOCKS             Heatsink_Overtemperature + 1
 
 #define ISR_FREQ_INTERLOCK_TIMEBASE     5000.0
-
 
 /**
  * Private functions
@@ -247,7 +248,6 @@ static inline void run_dsp_pi_inline(dsp_pi_t *p_pi);
 static inline void set_pwm_duty_hbridge_inline(volatile struct EPWM_REGS
                                                *p_pwm_module, float duty_pu);
 static inline uint16_t insert_buffer_inline(buf_t *p_buf, float data);
-
 
 /**
  * Main function for this power supply module
@@ -619,6 +619,18 @@ static interrupt void isr_init_controller(void)
         g_pwm_modules.pwm_regs[i]->ETCLR.bit.INT = 1;
     }
 
+    /**
+     *  Enable XINT2 (external interrupt 2) interrupt used for sync pulses for
+     *  the first time
+     *
+     *  TODO: include here mechanism described in section 1.5.4.3 from F28M36
+     *  Technical Reference Manual (SPRUHE8E) to clear flag before enabling, to
+     *  avoid false alarms that may occur when sync pulses are received during
+     *  firmware initialization.
+     */
+    PieCtrlRegs.PIEIER1.bit.INTx5 = 1;
+
+    /// Clear interrupt flag for PWM interrupts group
     PieCtrlRegs.PIEACK.all |= M_INT3;
 }
 
@@ -627,10 +639,10 @@ static interrupt void isr_init_controller(void)
  */
 static interrupt void isr_controller(void)
 {
-    static uint16_t i, flag_siggen;
+    static uint16_t i;
     static float temp[4];
 
-    SET_DEBUG_GPIO0;
+    //SET_DEBUG_GPIO0;
     SET_DEBUG_GPIO1;
 
     /// Get HRADC samples
@@ -723,8 +735,6 @@ static interrupt void isr_controller(void)
                                      g_controller_ctom.output_signals[i].f);
             }
         }
-
-        /// TODO: save on buffers
     }
 
     RUN_SCOPE(PS1_SCOPE);
@@ -732,6 +742,44 @@ static interrupt void isr_controller(void)
     RUN_SCOPE(PS3_SCOPE);
     RUN_SCOPE(PS4_SCOPE);
 
+    /**
+     * Re-enable external interrupt 2 (XINT2) interrupts to allow sync pulses to
+     * be handled once per isr_controller
+     */
+    if(PieCtrlRegs.PIEIER1.bit.INTx5 == 0)
+    {
+        /// Set alarm if counter is below limit when receiving new sync pulse
+        if(counter_sync_period < MIN_NUM_ISR_CONTROLLER_SYNC)
+        {
+            /// Loop through active power supplies to set alarm
+           for(i = 0; i < NUM_MAX_PS_MODULES; i++)
+           {
+               if(g_ipc_ctom.ps_module[i].ps_status.bit.active)
+               {
+                   g_ipc_ctom.ps_module[i].ps_alarms = High_Sync_Input_Frequency;
+               }
+           }
+        }
+
+        /// Store counter value on BSMP variable
+        g_ipc_ctom.period_sync_pulse = counter_sync_period;
+        counter_sync_period = 0;
+    }
+
+    counter_sync_period++;
+
+    /**
+     * Reset counter to threshold to avoid false alarms during its overflow
+     */
+    if(counter_sync_period == MAX_NUM_ISR_CONTROLLER_SYNC)
+    {
+        counter_sync_period = MIN_NUM_ISR_CONTROLLER_SYNC;
+    }
+
+    /// Re-enable XINT2 (external interrupt 2) interrupt used for sync pulses
+    PieCtrlRegs.PIEIER1.bit.INTx5 = 1;
+
+    /// Clear interrupt flags for PWM interrupts
     PS1_PWM_MODULATOR->ETCLR.bit.INT = 1;
     PS1_PWM_MODULATOR_NEG->ETCLR.bit.INT = 1;
     PS2_PWM_MODULATOR->ETCLR.bit.INT = 1;
@@ -740,11 +788,9 @@ static interrupt void isr_controller(void)
     PS3_PWM_MODULATOR_NEG->ETCLR.bit.INT = 1;
     PS4_PWM_MODULATOR->ETCLR.bit.INT = 1;
     PS4_PWM_MODULATOR_NEG->ETCLR.bit.INT = 1;
-
-    flag_siggen = 0;
-
     PieCtrlRegs.PIEACK.all |= M_INT3;
 
+    //CLEAR_DEBUG_GPIO0;
     CLEAR_DEBUG_GPIO1;
 }
 
@@ -916,6 +962,7 @@ static void reset_interlocks(uint16_t id)
 {
     g_ipc_ctom.ps_module[id].ps_hard_interlock = 0;
     g_ipc_ctom.ps_module[id].ps_soft_interlock = 0;
+    g_ipc_ctom.ps_module[id].ps_alarms = 0;
 
     if(g_ipc_ctom.ps_module[id].ps_status.bit.state < Initializing)
     {

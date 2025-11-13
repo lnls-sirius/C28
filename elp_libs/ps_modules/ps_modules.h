@@ -102,6 +102,7 @@ typedef struct
     float           ps_reference;
     uint32_t        ps_hard_interlock;
     uint32_t        ps_soft_interlock;
+    uint32_t        ps_alarms;
     void            (*turn_on)(uint16_t);
     void            (*turn_off)(uint16_t);
     void            (*isr_soft_interlock)(void);

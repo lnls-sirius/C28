@@ -296,6 +296,11 @@ typedef enum
     Complementary_PS_Itlk
 } soft_interlocks_t;
 
+typedef enum
+{
+    High_Sync_Input_Frequency = 0x00000001
+} alarms_t;
+
 #define NUM_HARD_INTERLOCKS             ARM_2_Overcurrent + 1
 #define NUM_SOFT_INTERLOCKS             IGBTs_Current_High_Difference + 1
 
@@ -748,6 +753,18 @@ static interrupt void isr_init_controller(void)
     PWM_MODULATOR_IGBT_2_MOD_1->ETSEL.bit.INTSEL = ET_CTR_ZERO;
     PWM_MODULATOR_IGBT_2_MOD_1->ETCLR.bit.INT = 1;
 
+    /**
+     *  Enable XINT2 (external interrupt 2) interrupt used for sync pulses for
+     *  the first time
+     *
+     *  TODO: include here mechanism described in section 1.5.4.3 from F28M36
+     *  Technical Reference Manual (SPRUHE8E) to clear flag before enabling, to
+     *  avoid false alarms that may occur when sync pulses are received during
+     *  firmware initialization.
+     */
+    PieCtrlRegs.PIEIER1.bit.INTx5 = 1;
+
+    /// Clear interrupt flag for PWM interrupts group
     PieCtrlRegs.PIEACK.all |= M_INT3;
 }
 
@@ -761,7 +778,7 @@ static interrupt void isr_controller(void)
 
     //CLEAR_DEBUG_GPIO1;
     //SET_DEBUG_GPIO0;
-    //SET_DEBUG_GPIO1;
+    SET_DEBUG_GPIO1;
 
     temp[0] = 0.0;
     temp[1] = 0.0;
@@ -939,12 +956,42 @@ static interrupt void isr_controller(void)
 
     SET_INTERLOCKS_TIMEBASE_FLAG(0);
 
+    /**
+     * Re-enable external interrupt 2 (XINT2) interrupts to allow sync pulses to
+     * be handled once per isr_controller
+     */
+    if(PieCtrlRegs.PIEIER1.bit.INTx5 == 0)
+    {
+        /// Set alarm if counter is below limit when receiving new sync pulse
+        if(counter_sync_period < MIN_NUM_ISR_CONTROLLER_SYNC)
+        {
+            g_ipc_ctom.ps_module[0].ps_alarms = High_Sync_Input_Frequency;
+        }
+
+        /// Store counter value on BSMP variable
+        g_ipc_ctom.period_sync_pulse = counter_sync_period;
+        counter_sync_period = 0;
+    }
+
+    counter_sync_period++;
+
+    /**
+     * Reset counter to threshold to avoid false alarms during its overflow
+     */
+    if(counter_sync_period == MAX_NUM_ISR_CONTROLLER_SYNC)
+    {
+        counter_sync_period = MIN_NUM_ISR_CONTROLLER_SYNC;
+    }
+
+    /// Re-enable XINT2 (external interrupt 2) interrupt used for sync pulses
+    PieCtrlRegs.PIEIER1.bit.INTx5 = 1;
+
+    /// Clear interrupt flags for PWM interrupts
     PWM_MODULATOR_IGBT_1_MOD_1->ETCLR.bit.INT = 1;
     PWM_MODULATOR_IGBT_2_MOD_1->ETCLR.bit.INT = 1;
-
     PieCtrlRegs.PIEACK.all |= M_INT3;
 
-    //CLEAR_DEBUG_GPIO1;
+    CLEAR_DEBUG_GPIO1;
 }
 
 /**
@@ -1131,6 +1178,7 @@ static void reset_interlocks(uint16_t dummy)
 {
     g_ipc_ctom.ps_module[0].ps_hard_interlock = 0;
     g_ipc_ctom.ps_module[0].ps_soft_interlock = 0;
+    g_ipc_ctom.ps_module[0].ps_alarms = 0;
 
     if(g_ipc_ctom.ps_module[0].ps_status.bit.state < Initializing)
     {
@@ -1179,7 +1227,7 @@ static void reset_interlocks(uint16_t dummy)
  */
 static inline void check_interlocks(void)
 {
-    SET_DEBUG_GPIO1;
+    //SET_DEBUG_GPIO1;
 
     if(fabs(I_LOAD_MEAN) > MAX_I_LOAD)
     {
@@ -1408,7 +1456,7 @@ static inline void check_interlocks(void)
     //CLEAR_DEBUG_GPIO1;
     //SET_DEBUG_GPIO1;
     run_interlocks_debouncing(0);
-    CLEAR_DEBUG_GPIO1;
+    //CLEAR_DEBUG_GPIO1;
 
     #ifdef USE_ITLK
     if(g_ipc_ctom.ps_module[0].ps_status.bit.state == Interlock)

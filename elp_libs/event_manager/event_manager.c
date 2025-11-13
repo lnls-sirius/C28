@@ -231,23 +231,27 @@ void run_interlocks_debouncing(uint16_t id)
  */
 void set_hard_interlock(uint16_t id, uint32_t itlk)
 {
-    g_event_manager[id].hard_interlocks.event[itlk].flag = 1;
-
-    if(g_event_manager[id].hard_interlocks.event[itlk].counter >=
-       g_event_manager[id].hard_interlocks.event[itlk].debounce_count)
+    // Protection against inexistent interlock
+    if(itlk < g_event_manager[id].hard_interlocks.num_events)
     {
-        if(!(g_ipc_ctom.ps_module[id].ps_hard_interlock & lut_bit_position[itlk]))
+        g_event_manager[id].hard_interlocks.event[itlk].flag = 1;
+
+        if(g_event_manager[id].hard_interlocks.event[itlk].counter >=
+           g_event_manager[id].hard_interlocks.event[itlk].debounce_count)
         {
-            #ifdef USE_ITLK
-            g_ipc_ctom.ps_module[id].turn_off(id);
-            g_ipc_ctom.ps_module[id].ps_status.bit.state = Interlock;
-            #endif
+            if(!(g_ipc_ctom.ps_module[id].ps_hard_interlock & lut_bit_position[itlk]))
+            {
+                #ifdef USE_ITLK
+                g_ipc_ctom.ps_module[id].turn_off(id);
+                g_ipc_ctom.ps_module[id].ps_status.bit.state = Interlock;
+                #endif
 
-            g_ipc_ctom.ps_module[id].ps_hard_interlock |= lut_bit_position[itlk];
+                g_ipc_ctom.ps_module[id].ps_hard_interlock |= lut_bit_position[itlk];
+            }
+
+            g_event_manager[id].hard_interlocks.event[itlk].flag = 0;
+            g_event_manager[id].hard_interlocks.event[itlk].counter = 0;
         }
-
-        g_event_manager[id].hard_interlocks.event[itlk].flag = 0;
-        g_event_manager[id].hard_interlocks.event[itlk].counter = 0;
     }
 }
 
@@ -261,71 +265,75 @@ void set_hard_interlock(uint16_t id, uint32_t itlk)
  */
 void set_soft_interlock(uint16_t id, uint32_t itlk)
 {
-    g_event_manager[id].soft_interlocks.event[itlk].flag = 1;
-
-    if(g_event_manager[id].soft_interlocks.event[itlk].counter >=
-       g_event_manager[id].soft_interlocks.event[itlk].debounce_count)
+    // Protection against inexistent interlock
+    if(itlk < g_event_manager[id].soft_interlocks.num_events)
     {
-        if(!(g_ipc_ctom.ps_module[id].ps_soft_interlock & lut_bit_position[itlk]))
+        g_event_manager[id].soft_interlocks.event[itlk].flag = 1;
+
+        if(g_event_manager[id].soft_interlocks.event[itlk].counter >=
+           g_event_manager[id].soft_interlocks.event[itlk].debounce_count)
         {
-            #ifdef USE_ITLK
-            g_ipc_ctom.ps_module[id].turn_off(id);
-            g_ipc_ctom.ps_module[id].ps_status.bit.state = Interlock;
-            #endif
+            if(!(g_ipc_ctom.ps_module[id].ps_soft_interlock & lut_bit_position[itlk]))
+            {
+                #ifdef USE_ITLK
+                g_ipc_ctom.ps_module[id].turn_off(id);
+                g_ipc_ctom.ps_module[id].ps_status.bit.state = Interlock;
+                #endif
 
-            g_ipc_ctom.ps_module[id].ps_soft_interlock |= lut_bit_position[itlk];
+                g_ipc_ctom.ps_module[id].ps_soft_interlock |= lut_bit_position[itlk];
+            }
+
+            g_event_manager[id].soft_interlocks.event[itlk].flag = 0;
+            g_event_manager[id].soft_interlocks.event[itlk].counter = 0;
         }
-
-        g_event_manager[id].soft_interlocks.event[itlk].flag = 0;
-        g_event_manager[id].soft_interlocks.event[itlk].counter = 0;
     }
 }
 
 /**
- * ISR for MtoC hard interlock request. This function does not implements a
- * debounce logic.
+ * ISR for MtoC hard interlock request. This function re-uses set_hard_interlock()
+ * function implementation for debouncing.
+ *
+ * It's important to guarantee that ARM uses the interlock register
+ * (MtoC ps_hard_interlock) as the enumerate argument 'itlk' from
+ * set_hard_interlock(), which indicates the most current activated interlock.
+ *
+ * In older version, it was used just like the C28 interlock registers, and in
+ * this case, C28 would need to log2() this register to find out which bit
+ * (or event) was activated for debouncing logic.
+ *
+ * Thus, in order to maintain efficient communication and simplify debouncing
+ * logic, both ARM interlocks registers must be used differently from C28
+ * interlock registers.
  */
 interrupt void isr_hard_interlock(void)
 {
-    //if(!(g_ipc_ctom.ps_module[g_ipc_mtoc.msg_id].ps_hard_interlock &
-    //     g_ipc_mtoc.ps_module[g_ipc_mtoc.msg_id].ps_hard_interlock))
-    if( (g_ipc_ctom.ps_module[g_ipc_mtoc.msg_id].ps_hard_interlock &
-         g_ipc_mtoc.ps_module[g_ipc_mtoc.msg_id].ps_hard_interlock) !=
-         g_ipc_mtoc.ps_module[g_ipc_mtoc.msg_id].ps_hard_interlock )
-    {
-        #ifdef USE_ITLK
-        g_ipc_ctom.ps_module[g_ipc_mtoc.msg_id].turn_off(g_ipc_mtoc.msg_id);
-        g_ipc_ctom.ps_module[g_ipc_mtoc.msg_id].ps_status.bit.state = Interlock;
-        #endif
-
-        g_ipc_ctom.ps_module[g_ipc_mtoc.msg_id].ps_hard_interlock |=
-        g_ipc_mtoc.ps_module[g_ipc_mtoc.msg_id].ps_hard_interlock;
-    }
+    set_hard_interlock(g_ipc_mtoc.msg_id,
+                       g_ipc_mtoc.ps_module[g_ipc_mtoc.msg_id].ps_hard_interlock);
 
     CtoMIpcRegs.MTOCIPCACK.all = HARD_INTERLOCK;
     PieCtrlRegs.PIEACK.all |= M_INT11;
 }
 
 /**
- * ISR for MtoC soft interlock request. This function does not implements a
- * debounce logic.
+ * ISR for MtoC soft interlock request. This function re-uses set_soft_interlock()
+ * function implementation for debouncing.
+ *
+ * It's important to guarantee that ARM uses the interlock register
+ * (MtoC ps_soft_interlock) as the enumerate argument 'itlk' from
+ * set_soft_interlock(), which indicates the most current activated interlock.
+ *
+ * In older version, it was used just like the C28 interlock registers, and in
+ * this case, C28 would need to log2() this register to find out which bit
+ * (or event) was activated for debouncing logic.
+ *
+ * Thus, in order to maintain efficient communication and simplify debouncing
+ * logic, both ARM interlocks registers must be used differently from C28
+ * interlock registers.
  */
 interrupt void isr_soft_interlock(void)
 {
-    //if(!(g_ipc_ctom.ps_module[g_ipc_mtoc.msg_id].ps_soft_interlock &
-    //     g_ipc_mtoc.ps_module[g_ipc_mtoc.msg_id].ps_soft_interlock))
-    if( (g_ipc_ctom.ps_module[g_ipc_mtoc.msg_id].ps_soft_interlock &
-         g_ipc_mtoc.ps_module[g_ipc_mtoc.msg_id].ps_soft_interlock) !=
-         g_ipc_mtoc.ps_module[g_ipc_mtoc.msg_id].ps_soft_interlock )
-    {
-        #ifdef USE_ITLK
-        g_ipc_ctom.ps_module[g_ipc_mtoc.msg_id].turn_off(g_ipc_mtoc.msg_id);
-        g_ipc_ctom.ps_module[g_ipc_mtoc.msg_id].ps_status.bit.state = Interlock;
-        #endif
-
-        g_ipc_ctom.ps_module[g_ipc_mtoc.msg_id].ps_soft_interlock |=
-        g_ipc_mtoc.ps_module[g_ipc_mtoc.msg_id].ps_soft_interlock;
-    }
+    set_soft_interlock(g_ipc_mtoc.msg_id,
+                       g_ipc_mtoc.ps_module[g_ipc_mtoc.msg_id].ps_soft_interlock);
 
     CtoMIpcRegs.MTOCIPCACK.all = SOFT_INTERLOCK;
     PieCtrlRegs.PIEACK.all |= M_INT11;

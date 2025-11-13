@@ -34,6 +34,12 @@
 #include "scope/scope.h"
 
 /**
+ * Synchronization defines
+ */
+#define MIN_NUM_ISR_CONTROLLER_SYNC     1000
+#define MAX_NUM_ISR_CONTROLLER_SYNC     4294967295  // 0xFFFFFFFF
+
+/**
  * Shared resources defines
  */
 
@@ -129,6 +135,7 @@ typedef struct
     error_mtoc_t    error_mtoc;
     uint32_t        counter_set_slowref;
     uint32_t        counter_sync_pulse;
+    uint32_t        period_sync_pulse;
     ps_module_t     ps_module[NUM_MAX_PS_MODULES];
     siggen_t        siggen[NUM_MAX_PS_MODULES];
     wfmref_t        wfmref[NUM_MAX_PS_MODULES];
@@ -161,6 +168,8 @@ extern volatile float g_buf_samples_mtoc[SIZE_BUF_SAMPLES_MTOC];
 
 extern volatile ipc_ctom_t g_ipc_ctom;
 extern volatile ipc_mtoc_t g_ipc_mtoc;
+
+extern volatile uint32_t counter_sync_period;
 
 extern void init_ipc(void);
 extern void send_ipc_msg(uint16_t msg_id, uint32_t msg);

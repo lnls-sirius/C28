@@ -35,6 +35,8 @@ volatile float g_buf_samples_ctom[SIZE_BUF_SAMPLES_CTOM];
 volatile ipc_ctom_t g_ipc_ctom;
 volatile ipc_mtoc_t g_ipc_mtoc;
 
+volatile uint32_t counter_sync_period = MIN_NUM_ISR_CONTROLLER_SYNC;
+
 #pragma CODE_SECTION(isr_ipc_sync_pulse,"ramfuncs");
 
 /**
@@ -66,6 +68,7 @@ void init_ipc(void)
     g_ipc_ctom.error_mtoc = No_Error_MtoC;
     g_ipc_ctom.counter_set_slowref =  0;
     g_ipc_ctom.counter_sync_pulse =  0;
+    g_ipc_ctom.period_sync_pulse =  0;
 
     EALLOW;
 
@@ -78,9 +81,6 @@ void init_ipc(void)
     *   - Qualification is asynchronous
     *   - Enable XINT2
     *   - Map XINT2 ISR
-    *
-    *  TODO: choose between XINT2 or XINT3
-    *
     */
     if(UDC_V2_0)
     {
@@ -89,7 +89,6 @@ void init_ipc(void)
         GpioCtrlRegs.GPBQSEL1.bit.GPIO32 = 1;
 
         GpioTripRegs.GPTRIP5SEL.bit.GPTRIP5SEL = 32;
-        /*GpioTripRegs.GPTRIP6SEL.bit.GPTRIP6SEL = 32;*/
     }
 
     else if(UDC_V2_1)
@@ -106,13 +105,10 @@ void init_ipc(void)
          * TODO: improve GPIO selection
          */
         GpioTripRegs.GPTRIP5SEL.bit.GPTRIP5SEL = 55;//38;
-        /*GpioTripRegs.GPTRIP6SEL.bit.GPTRIP6SEL = 38;*/
     }
 
     XIntruptRegs.XINT2CR.bit.ENABLE = 1;
     XIntruptRegs.XINT2CR.bit.POLARITY = 0;
-    /*XIntruptRegs.XINT3CR.bit.ENABLE = 0;
-    XIntruptRegs.XINT3CR.bit.POLARITY = 0;*/
 
     /**
      * TODO: create enable and disable EPWMSYNCO functions on pwm module
@@ -126,14 +122,16 @@ void init_ipc(void)
     PieVectTable.MTOCIPC_INT1 = &isr_ipc_lowpriority_msg;
     PieVectTable.MTOCIPC_INT2 = &isr_ipc_sync_pulse;
     PieVectTable.XINT2        = &isr_ipc_sync_pulse;
-    //PieVectTable.XINT3      = &isr_ipc_sync_pulse;
     PieVectTable.MTOCIPC_INT3 = g_ipc_ctom.ps_module[0].isr_hard_interlock;
     PieVectTable.MTOCIPC_INT4 = g_ipc_ctom.ps_module[0].isr_soft_interlock;
 
     /* Enable interrupts */
 
-    PieCtrlRegs.PIEIER1.bit.INTx5  = 1;                 //    XINT2
-    //PieCtrlRegs.PIEIER12.bit.INTx1 = 1;               //    XINT3
+    /**
+     * XINT2 is now only enabled by isr_controller to keep one ISR for sync
+     * pulses for each controller period
+     * */
+    //PieCtrlRegs.PIEIER1.bit.INTx5  = 1;                 // XINT2
 
     PieCtrlRegs.PIEIER11.bit.INTx1 = 1;                 // MTOCIPCINT1
     PieCtrlRegs.PIEIER11.bit.INTx2 = 1;                 // MTOCIPCINT2
@@ -320,27 +318,12 @@ interrupt void isr_ipc_lowpriority_msg(void)
             case Enable_Scope:
             {
                 enable_scope(&SCOPE_CTOM[msg_id]);
-                //enable_buffer(&g_ipc_ctom.buf_samples[msg_id]);
-                /*enable_buffer(&g_ipc_ctom.buf_samples[0]);
-                enable_buffer(&g_ipc_ctom.buf_samples[1]);
-                enable_buffer(&g_ipc_ctom.buf_samples[2]);
-                enable_buffer(&g_ipc_ctom.buf_samples[3]);*/
                 break;
             }
 
             case Disable_Scope:
             {
-                /**
-                 * TODO: It sets as Postmortem to wait buffer complete. Maybe
-                 * it's better to create a postmortem BSMP function
-                 */
                 disable_scope(&SCOPE_CTOM[msg_id]);
-                //postmortem_buffer(&g_ipc_ctom.buf_samples[msg_id]);
-                /*postmortem_buffer(&g_ipc_ctom.buf_samples[0]);
-                postmortem_buffer(&g_ipc_ctom.buf_samples[1]);
-                postmortem_buffer(&g_ipc_ctom.buf_samples[2]);
-                postmortem_buffer(&g_ipc_ctom.buf_samples[3]);*/
-                //disable_buffer(&g_ipc_ctom.buf_samples[msg_id]);
                 break;
             }
 
@@ -498,7 +481,8 @@ interrupt void isr_ipc_sync_pulse(void)
 {
     uint16_t i;
 
-    SET_DEBUG_GPIO1;
+    SET_DEBUG_GPIO0;
+    //SET_DEBUG_GPIO1;
 
     for(i = 0; i < NUM_MAX_PS_MODULES; i++)
     {
@@ -537,14 +521,6 @@ interrupt void isr_ipc_sync_pulse(void)
 
     g_ipc_ctom.counter_sync_pulse++;
 
-    /*if(g_ipc_ctom.buf_samples[0].status == Idle)
-    {
-        g_ipc_ctom.buf_samples[0].status = Postmortem;
-        g_ipc_ctom.buf_samples[1].status = Postmortem;
-        g_ipc_ctom.buf_samples[2].status = Postmortem;
-        g_ipc_ctom.buf_samples[3].status = Postmortem;
-    }*/
-
     if(SCOPE_CTOM[0].buffer.status == Idle)
     {
         SCOPE_CTOM[0].buffer.status = Postmortem;
@@ -553,9 +529,39 @@ interrupt void isr_ipc_sync_pulse(void)
         SCOPE_CTOM[3].buffer.status = Postmortem;
     }
 
-    CtoMIpcRegs.MTOCIPCACK.all = SYNC_PULSE;
-    PieCtrlRegs.PIEACK.all |= M_INT1;
-    PieCtrlRegs.PIEACK.all |= M_INT11;
+    /**
+     * Safe procedure to disable the XINT2 PIEIER bit and preserve associated
+     * PIEIFR flags, as described in section 1.5.4.3.2 from F28M36 Technical
+     * Reference Manual (SPRUHE8E)
+     *
+     * TODO: check whether DINT and EINT are really necessary, since this
+     * procedure is executed inside a ISR.
+     */
 
+    /// 1) Disable global interrupts
+    DINT;
+
+    /// 2) Clear PIEIER bit to disable XINT2 (external interrupt 2) interrupt
+    PieCtrlRegs.PIEIER1.bit.INTx5 = 0;
+
+    /// 3) Wait 5 clock cycles
+    __asm(" NOP");
+    __asm(" NOP");
+    __asm(" NOP");
+    __asm(" NOP");
+    __asm(" NOP");
+
+    // 4) Clear CPU IFR bit for XINT2 interrupt group
+    IFR &= ~M_INT1;
+
+    /// 5) Clear PIEACK bit from XINT2 interrupt group.
+    PieCtrlRegs.PIEACK.all |= M_INT1;
+    PieCtrlRegs.PIEACK.all |= M_INT11;          /// Here we also clear
+    CtoMIpcRegs.MTOCIPCACK.all = SYNC_PULSE;    /// MTOCIPCINT2 ACK bits
+
+    CLEAR_DEBUG_GPIO0;
     //CLEAR_DEBUG_GPIO1;
+
+    /// 6) Enable global interrupts
+    EINT;
 }
