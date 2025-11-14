@@ -11,7 +11,7 @@
 /**
  * @file fbp.c
  * @brief FBP v4.0 module
- * 
+ *
  * Module for control of FBP v4.0 power supplies (Low-Power Power Supply).
  *
  * @author gabriel.brunheira
@@ -725,8 +725,12 @@ static interrupt void isr_controller(void)
                             *g_controller_ctom.dsp_modules.dsp_error[i].pos -
                             *g_controller_ctom.dsp_modules.dsp_error[i].neg;
 
-                    run_dsp_pi_inline(&g_controller_ctom.dsp_modules.dsp_pi[i]);
-
+                    if (fabs(*g_controller_ctom.dsp_module.dsp_error[i].error) < 5.0)
+                    {
+                        run_dsp_pi_inline(
+                            &g_controller_ctom.dsp_modules.dsp_pi[i]
+                        );
+                    }
                     //SATURATE(g_controller_ctom.output_signals[i].f,
                     //         PWM_MAX_DUTY, PWM_MIN_DUTY);
                 }
