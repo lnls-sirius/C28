@@ -727,7 +727,7 @@ static interrupt void isr_controller(void)
                     //run_dsp_error(&g_controller_ctom.dsp_modules.dsp_error[i]);
 
                     // Update error only if current variation is within acceptable range
-                    if (fabs(temp[i] - temp_old[i]) <= MAX_CURRENT_STEP)
+                    if (fabs(temp[i] - temp_old[i]) <= MAX_OUTPUT_CHANGE[i])
                     {
                         *g_controller_ctom.dsp_modules.dsp_error[i].error =
                             *g_controller_ctom.dsp_modules.dsp_error[i].pos -
