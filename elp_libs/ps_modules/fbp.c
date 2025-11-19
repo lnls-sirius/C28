@@ -40,6 +40,7 @@
 #define MIN_DCLINK(id)          ANALOG_VARS_MIN[8+id]
 #define MAX_DCLINK(id)          ANALOG_VARS_MAX[8+id]
 #define MAX_TEMP(id)            ANALOG_VARS_MAX[12+id]
+#define MAX_OUTPUT_CHANGE(id)   ANALOG_VARS_MAX[16+id]
 
 /**
  * All power supplies defines
@@ -727,7 +728,7 @@ static interrupt void isr_controller(void)
                     //run_dsp_error(&g_controller_ctom.dsp_modules.dsp_error[i]);
 
                     // Update error only if current variation is within acceptable range
-                    if (fabs(temp[i] - temp_old[i]) <= MAX_OUTPUT_CHANGE[i])
+                    if (fabs(temp[i] - temp_old[i]) <= MAX_OUTPUT_CHANGE(i))
                     {
                         *g_controller_ctom.dsp_modules.dsp_error[i].error =
                             *g_controller_ctom.dsp_modules.dsp_error[i].pos -
